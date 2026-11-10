@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>チャッピーの返信メーカー</title>
+<style>
+* { box-sizing: border-box }
+body { margin: 0; background: #f4f6ea; color: #23352b; font: 16px/1.7 system-ui, sans-serif }
+main { max-width: 720px; margin: auto; padding: 44px 20px }
+header { margin-bottom: 24px }
+h1 { font-size: clamp(1.6rem, 5vw, 2.5rem); margin: 0 }
+h2 { margin-top: 0; font-size: 1.15rem }
+section { background: #fff; border: 1px solid #d5dfcf; border-radius: 18px; padding: 22px; margin-bottom: 16px }
+textarea { width: 100%; min-height: 115px; resize: vertical; padding: 12px; border: 1px solid #9dab9e; border-radius: 10px; font: inherit; color: inherit }
+button { background: #28583f; color: white; padding: 9px 15px; border: 0; border-radius: 10px; font: inherit; cursor: pointer }
+button:disabled { opacity: .55; cursor: default }
+#copy { background: #e2eee0; color: #23352b }
+input { max-width: 100%; font: inherit }
+small { display: block; margin-top: 6px }
+#reply { overflow-wrap: anywhere; white-space: pre-wrap }
+#status, #copyStatus { min-height: 1.7em; margin: 6px 0 }
+</style>
+<main>
+<header>
+<h1>🌱 チャッピーの返信メーカー</h1>
+<p>元の話題にひとこと、前向きなフレーズを添えて。</p>
+</header>
+<form id="form">
+<section>
+<h2><label for="message">返信したい文章</label></h2>
+<textarea id="message" placeholder="色違いでないよ～！" required></textarea>
+<p><label for="image">画像から文字を読み取る</label><br>
+<input id="image" type="file" accept="image/png,image/jpeg,image/webp,image/bmp"></p>
+<small>画像の読み取りにはネット接続が必要です。読み取った文章は上の欄で修正できます。</small>
+<p id="status" role="status"></p>
+<button id="generate">返信をつくる</button>
+</section>
+</form>
+<section>
+<h2>返信案</h2>
+<p id="reply" aria-live="polite">ここに返信が表示されます。</p>
+<button id="copy" type="button" disabled>コピー</button>
+<p id="copyStatus" role="status"></p>
+</section>
+</main>
+<script>
+const phrases = [
+  'そういう日もあるよね', '無理せず頑張っていこう', 'いろいろあるけど、前向きにね',
+  'それも一つの考え方だね', '焦らなくても大丈夫だよ', 'ぼちぼちやっていこうよ',
+  '大変だけど、頑張って', '人生いろいろあるからね', 'それはそれでいいと思うよ',
+  '気長にやっていこう', 'そういうこともあるよね', '無理のない範囲でね',
+  '一歩ずつ進んでいこう', 'そんな日もあるよね', 'いいね！その調子',
+  'あまり気にしすぎないでね', '頑張っていれば、きっといいことあるよ', 'それもまた経験だね',
+  '落ち着いていこう', '少しずつでいいんだよ', 'いろんなことがあるよね',
+  '今日も自分のペースで', '悪いことばかりじゃないよ', 'できることから始めよう',
+  '気持ちを切り替えていこう', 'それはそれで面白いね', '何とかなるよ',
+  'コツコツ続けることが大事だね', '頑張りすぎないように頑張ろう', '明日はきっといい日になるよ',
+  'いろいろあるけど、ぼちぼち頑張っていこう'
+];
+const groups = [
+  [/疲れ|眠い|しんど|つら|辛い|忙し|大変|落ち込|悲し/, [[0, 13, 7], [11, 19, 28], [1, 21, 29]]],
+  [/足りな|たりな|足りん|固まっ|終わんない|終わらな|見つからな|見つけられな|出ない|でない|できな|出来な|失敗|負け|ダメ|だめ|当たら|間に合わ|無理だった|うまくいか/, [[13, 0, 10], [19, 17, 4], [24, 9, 22], [5, 30, 12]]],
+  [/見つかった|見つけた|できた|出来た|出た|でた|勝った|当たった|嬉し|うれし|成功|合格|やった|楽しかった|ありがとう/, [[14, 25, 8], [21, 27, 12]]],
+  [/不安|心配|どうしよう|緊張|焦|こわい|怖い/, [[4, 18, 26], [15, 19, 11], [23, 12, 21]]],
+  [/どう思う|と思う|かな|どうする|どっち|迷っ|[?？]/, [[3, 8, 25], [23, 15, 19]]]
+];
+const fallback = [[20, 10, 7], [1, 2, 6], [21, 5, 12]];
+const restatements = [
+  [/(足りなかった|たりなかった)/, 'が足りなかったんだね'],
+  [/(足りない|たりない|足りん|たりん|不足している)/, 'が足りないんだね'],
+  [/(固まっちゃった|固まった)/, 'が固まったんだね'],
+  [/(終わんない|終わらない|終わんね[ぇえ]|終わらね[ぇえ])/, '、なかなか終わらないんだね'],
+  [/(終わらなかった|終わんなかった)/, '、終わらなかったんだね'],
+  [/(疲れた|疲れちゃった|疲れました)/, 'で疲れたんだね'],
+  [/(見つからない|見つからなかった|見つけられない|見つけられなかった)/, 'がなかなか見つからないんだね'],
+  [/(見つかった|見つけた)/, 'が見つかったんだね'],
+  [/(出ない|でない|出なかった|でなかった)/, 'がなかなか出ないんだね'],
+  [/(出た|でた)/, 'が出たんだね'],
+  [/(できなかった|出来なかった|できない|出来ない)/, 'がうまくいかなかったんだね'],
+  [/(できた|出来た)/, 'ができたんだね'],
+  [/(が|に)?(?:不安|心配)(?:だ|です|で|なん|$)/, 'のことが気がかりなんだね'],
+  [/(に)?合格(?:した|できた)/, 'に受かったんだね'],
+  [/(に)?失敗(?:した|しちゃった)/, 'が思うようにいかなかったんだね']
+];
+function acknowledge(message, group) {
+  const sentence = message.normalize('NFKC').split(/[。!?\r\n]+/).find(part => part.trim())?.trim() ?? '';
+  for (const [pattern, ending] of restatements) {
+    const match = pattern.exec(sentence);
+    if (!match) continue;
+    const topic = sentence.slice(0, match.index)
+      .replace(/(?:の子供|の子ども)?(?:を|が|は)?(?:[\s、]*(?:どこかで|どこにも|なかなか|全然|まだ|やっと))*[\s、]*(?:が|は|を|に|で)?[\s、]*$/, '')
+      .trim();
+    if (topic && Array.from(topic).length <= 24) return topic + ending;
+  }
+  const reactions = [
+    'ちょっと負担が大きかったんだね', '思うようにいかなかったんだね',
+    'うまくいったんだね', '先のことが気になってるんだね', 'どうするか考えてるところなんだね'
+  ];
+  const segmenter = new Intl.Segmenter('ja', { granularity: 'word' });
+  const clause = sentence.split(/[、,\s]+/)[0] || message.trim();
+  const topic = Array.from(segmenter.segment(clause)).find(part => part.isWordLike)?.segment
+    ?? Array.from(clause)[0];
+  const remainder = sentence.slice(sentence.indexOf(topic) + topic.length)
+    .replace(/^[\s、]*(?:は|が|を|で|に)?[\s、]*/, '')
+    .replace(/(?:んだよね|んだよ|かな[ぁあ]?|よね|ねえ|よ|ね|[〜～])+$/, '')
+    .trim();
+  if (remainder && /(?:なかった|ない|かった|った|した|したい|てる|ている|できる|れる|すぎる|そう|しい|つらい|痛い)$/.test(remainder)) {
+    return topic + '、' + remainder + 'んだね';
+  }
+  const reaction = reactions[group] ?? 'そうなんだね';
+  return topic + 'か、' + reaction;
+}
+function makeReply(message, variant) {
+  const clean = message.normalize('NFKC').replace(/\s/g, '');
+  const group = groups.findIndex(([pattern]) => pattern.test(clean));
+  const slots = groups[group]?.[1] ?? fallback;
+  const words = slots.map(slot => phrases[slot[variant % slot.length]]);
+  const lead = /^(?:そういう日|そんな日|人生いろいろ|いろんなこと|何とかなる)/.test(words[0]) ? 'まぁ、' : '';
+  return acknowledge(message, group) + '。' + lead + words[0] + '。'
+    + words.slice(1).join('、') + '、じゃあねバイバイ';
+}
+const $ = id => document.getElementById(id);
+let previous = '';
+let variant = 0;
+$('form').addEventListener('submit', event => {
+  event.preventDefault();
+  const message = $('message').value.trim();
+  if (!message) {
+    $('status').textContent = '返信したい文章を入力してください。';
+    $('message').focus();
+    return;
+  }
+  variant = message === previous ? variant + 1 : 0;
+  previous = message;
+  $('reply').textContent = makeReply(message, variant);
+  $('copy').disabled = false;
+  $('copyStatus').textContent = '';
+});
+$('copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('reply').textContent);
+    $('copyStatus').textContent = 'コピーしました。';
+  } catch {
+    const range = document.createRange();
+    range.selectNodeContents($('reply'));
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    $('copyStatus').textContent = '返信を選択しました。Ctrl+C または ⌘C でコピーできます。';
+  }
+});
+function loadOCR() {
+  if (window.Tesseract) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@6.0.1/dist/tesseract.min.js';
+    script.onload = resolve;
+    script.onerror = reject;
+    document.head.append(script);
+  });
+}
+$('image').addEventListener('change', async () => {
+  const input = $('image');
+  const file = input.files[0];
+  if (!file) return;
+  input.disabled = $('generate').disabled = $('message').readOnly = true;
+  $('status').textContent = '画像読み取りを準備中…';
+  let worker;
+  try {
+    await loadOCR();
+    worker = await Tesseract.createWorker(['jpn', 'eng'], 1, {
+      logger(info) {
+        if (info.status === 'recognizing text') {
+          $('status').textContent = '文字を読み取り中… ' + Math.round(info.progress * 100) + '%';
+        }
+      },
+      errorHandler() {}
+    });
+    const { data } = await worker.recognize(file);
+    const text = data.text.trim().replace(/(?<=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]) +(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}])/gu, '');
+    if (text) $('message').value = text;
+    $('status').textContent = text
+      ? '読み取った文章を確認して、返信をつくってください。'
+      : '文字が見つかりませんでした。別の画像を選ぶか、文章を入力してください。';
+  } catch {
+    $('status').textContent = '読み取れませんでした。ネット接続や画像形式を確認して、もう一度お試しください。';
+  } finally {
+    input.value = '';
+    input.disabled = $('generate').disabled = $('message').readOnly = false;
+    if (worker) await worker.terminate();
+  }
+});
+</script>
+</html>
